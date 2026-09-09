@@ -1,0 +1,102 @@
+name: ACEest Fitness CI/CD
+
+# Trigger on every push and every pull request, as required by the
+# assignment brief.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  # ---------------------------------------------------------------
+  # Stage 1: Build & Lint
+  # Compiles the application and checks for syntax / style errors.
+  # ---------------------------------------------------------------
+  build-and-lint:
+    name: Build & Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Byte-compile check (build)
+        run: python -m py_compile app.py
+
+      - name: Lint with flake8
+        run: flake8 app.py --max-line-length=100 --extend-ignore=E501
+
+  # ---------------------------------------------------------------
+  # Stage 2: Docker Image Assembly
+  # Builds the Docker image and confirms it starts up cleanly.
+  # ---------------------------------------------------------------
+  docker-build:
+    name: Docker Image Assembly
+    needs: build-and-lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        run: docker build -t aceest-fitness:${{ github.sha }} .
+
+      - name: Smoke-test the container (boots + health check responds)
+        run: |
+          docker run -d --name smoke-test -p 5000:5000 aceest-fitness:${{ github.sha }}
+          sleep 3
+          curl --fail http://localhost:5000/ || (docker logs smoke-test && exit 1)
+          docker stop smoke-test
+
+      - name: Save image as artifact
+        run: docker save aceest-fitness:${{ github.sha }} -o aceest-fitness-image.tar
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aceest-fitness-image
+          path: aceest-fitness-image.tar
+          retention-days: 1
+
+  # ---------------------------------------------------------------
+  # Stage 3: Automated Testing
+  # Runs the Pytest suite INSIDE the containerised environment to
+  # confirm the packaged application is stable end-to-end.
+  # ---------------------------------------------------------------
+  test-in-container:
+    name: Automated Testing (Pytest in Container)
+    needs: docker-build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Download image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: aceest-fitness-image
+
+      - name: Load Docker image
+        run: docker load -i aceest-fitness-image.tar
+
+      - name: Run Pytest suite inside the container
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace \
+            --entrypoint "" \
+            aceest-fitness:${{ github.sha }} \
+            sh -c "pip install --no-cache-dir pytest && pytest -v"
