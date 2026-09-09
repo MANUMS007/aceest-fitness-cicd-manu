@@ -99,4 +99,4 @@ jobs:
             -w /workspace \
             --entrypoint "" \
             aceest-fitness:${{ github.sha }} \
-            sh -c "pip install --no-cache-dir pytest && pytest -v"
+            sh -c "pip install --no-cache-dir pytest && pytest -m pytest -v"
